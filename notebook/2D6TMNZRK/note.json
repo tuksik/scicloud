@@ -1,0 +1,41 @@
+{
+  "paragraphs": [
+    {
+      "text": "%postgresql\n\nselect * from ava_entropy",
+      "user": "admin",
+      "dateUpdated": "2018-02-05 22:51:32.570",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python",
+        "editorHide": false
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "jobName": "paragraph_1517866971370_-388677896",
+      "id": "20180205-224251_1518179234",
+      "dateCreated": "2018-02-05 22:42:51.370",
+      "status": "READY",
+      "progressUpdateIntervalMs": 500
+    }
+  ],
+  "name": "~Trash/test",
+  "id": "2D6TMNZRK",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {
+    "2D5MX43ND:shared_process": [],
+    "2D4NEKQP4:shared_process": []
+  },
+  "config": {},
+  "info": {}
+}

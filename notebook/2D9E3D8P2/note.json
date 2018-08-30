@@ -1,0 +1,65 @@
+{
+  "paragraphs": [
+    {
+      "text": "import requests\nimport potsdb\nimport pandas\nimport arrow\nimport time\n\ntry:\n    # Use ujson if available.\n    import ujson as json\nexcept Exception:\n    import json\n\n\nclass OpenTSDBResponseSerie(object):\n    \"\"\"\n        A single OpenTSDB response serie i.e 1 element of the response\n        array.\n\n        Params:\n            **kwargs : OpenTSDB response serie data\n    \"\"\"\n\n    def __init__(self, **kwargs):\n        for k, v in kwargs.items():\n            setattr(self, k, v)\n\n    @property\n    def id(self):\n        \"\"\"\n            id for serie\n\n            Returns:\n                metric{sorted\u003dtag,key\u003dvalue}\n        \"\"\"\n        if len(self.tags.keys()) \u003e 0:\n            tags \u003d \",\".join([\"%s\u003d%s\" %\n                             (k, self.tags[k]) for k in sorted(self.tags.keys())])\n            return \"%s{%s}\" % (self.metric, tags)\n        else:\n            return self.metric\n\n    def alias(self, functOrStr):\n        \"\"\"\n            User specified alias using lambda functions and string formatting using\n            metadata provided by opentsdb.\n            This function fails silently.\n\n            Params:\n                functOrStr :    lambda function or python string format. When using lambda\n                                functions,  they must begin with \u0027!\u0027 e.g. !lambda x: x....\n            Return:\n                Formatted alias on success and id or failure.\n        \"\"\"\n        flatData \u003d self.__flattenedMetadata()\n        # Normalized alias\n        _alias \u003d \"\"\n        if functOrStr.startswith(\"!\"):\n            try:\n                _alias \u003d eval(functOrStr[1:])(flatData)\n            except Exception as e:\n                pass\n        else:\n            try:\n                _alias \u003d functOrStr % (flatData)\n            except Exception as e:\n                pass\n\n        if _alias \u003d\u003d \"\":\n            return self.id\n\n        return _alias\n\n    def __flattenedMetadata(self):\n        \"\"\"\n            Flattens all metadata which is used for normalization\n        \"\"\"\n        return dict([(\"metric\", self.metric)] +\n                    [(\"tags.%s\" % (k), v) for k, v in self.tags.items()])\n\n    def datapoints(self, convertTime\u003dFalse):\n        \"\"\"\n            Converts datapoints\n\n            Params:\n                convertTime : Whether to convert epoch to pandas datetime\n\n            Return:\n                Array of tuples (time, value)\n        \"\"\"\n        if convertTime:\n            return [(pandas.to_datetime(int(k), unit\u003d\u0027s\u0027), v) for k, v in self.dps.items()]\n\n        ret \u003d [(int(k), v) for k, v in self.dps.items()]\n        return sorted(ret, key\u003dlambda t: t[0])\n\n\nclass OpenTSDBResponse(object):\n    \"\"\" Complete OpenTSDB response \"\"\"\n\n    def __init__(self, otsdbResp):\n        \"\"\"\n            Params:\n                otsdbResp : raw opentsdb response as a str, list or tuple.\n        \"\"\"\n        if isinstance(otsdbResp, list) or isinstance(otsdbResp, tuple):\n            # dict response\n            self._series \u003d [OpenTSDBResponseSerie(**s) for s in otsdbResp]\n        else:\n            self._series \u003d [OpenTSDBResponseSerie(**s) for s in json.loads(otsdbResp)]\n\n    @property\n    def series(self):\n        \"\"\"\n            Use iterator for better memory management\n        \"\"\"\n        for s in self._series:\n            yield s\n\n    def DataFrame(self, aliasTransform\u003dNone, convertTime\u003dFalse):\n        \"\"\"\n            Converts an OpenTSDB array response into a DataFrame\n\n            Params:\n                convertTime : Whether to convert epoch to pandas datetime\n                aliasTransform : lambda function or string format to customize\n                                 serie name i.e. alias\n\n            Return:\n                OpenTSDB response DataFrame\n        \"\"\"\n        if aliasTransform \u003d\u003d None:\n            return pandas.DataFrame(dict([\n                (s.id, s.datapoints(convertTime)) for s in self.series]))\n        else:\n            return pandas.DataFrame(dict([\n                (s.alias(aliasTransform), s.datapoints(convertTime)) for s in self.series]))\n\n\nclass BaseClient(object):\n\n    def __init__(self, host, port\u003d4242, ssl\u003dFalse):\n        if ssl:\n            self.url \u003d \"https://%s:%d\" % (host, port)\n        else:\n            self.url \u003d \"http://%s:%d\" % (host, port)\n\n    def queryUrl(self, **kwargs):\n        return str(\"%s/api/query?%s\" % (self.url, self.__urlEncodedParams(**kwargs)))\n\n    def __urlEncodedParams(self, aggr\u003d\"sum\", rate\u003dFalse, end\u003dNone, **kwargs):\n\n        timeStr \u003d \"start\u003d%s\" % (kwargs[\"start\"])\n        if end !\u003d None:\n            timeStr +\u003d \"\u0026end\u003d%s\" % (end)\n\n        if rate:\n            prefix \u003d \"%s:rate:%s\" % (aggr, kwargs[\"metric\"])\n        else:\n            prefix \u003d \"%s:%s\" % (aggr, kwargs[\"metric\"])\n\n        # TODO: check\n        tagsStr \u003d \",\".join([\"%s\u003d%s\" % (k, kwargs[\"tags\"][k]) for k in sorted(kwargs[\"tags\"].keys())])\n\n        if tagsStr !\u003d \"\":\n            return \"%s\u0026m\u003d%s{%s}\" % (timeStr, prefix, tagsStr)\n        else:\n            return \"%s\u0026m\u003d%s\" % (timeStr, prefix)\n\n\nclass Client(BaseClient):\n\n    def query(self, **kwargs):\n        resp \u003d requests.get(self.queryUrl(**kwargs))\n        if resp.status_code \u003e\u003d 200 and resp.status_code \u003c 400:\n            return OpenTSDBResponse(resp.text)\n        # error\n        return resp.text\n\n\ndef add_history_data(eui, ndays):\n    host_ip \u003d \"129.241.107.186\"\n    host_port \u003d 4242\n    readClient \u003d Client(host_ip, port\u003dhost_port)\n    writeClient \u003d potsdb.Client(host_ip, port\u003dhost_port)\n\n    time_now \u003d arrow.utcnow().to(\u0027CET\u0027)\n    start_time \u003d time_now.replace(days\u003d-ndays).replace(minutes\u003d-3).timestamp\n    end_time \u003d time_now.replace(days\u003d-ndays).timestamp\n\n    query_con \u003d {\n        \"metric\": \"\",\n        \"tags\": {\"node_eui\": eui},\n        \"start\": start_time,\n        \"end\": end_time,\n        \"aggr\": \"sum\"\n    }\n    metrics \u003d [\u0027SENSOR_GP_CO2\u0027, \u0027SENSOR_GP_HUM\u0027, \u0027SENSOR_GP_NO2\u0027, \u0027SENSOR_GP_PRES\u0027, \u0027SENSOR_GP_TC\u0027]\n    for metric in metrics:\n        query_con[\u0027metric\u0027] \u003d metric\n        results \u003d readClient.query(**query_con)\n        for ts in results.series:\n            for t, value in ts.datapoints():\n                timestamp \u003d arrow.get(t).replace(days\u003d+ndays).timestamp\n                writeClient.log(metric, value, timestamp\u003dtimestamp, node_eui\u003deui)\n\n    writeClient.close()\n\n\nif __name__ \u003d\u003d \u0027__main__\u0027:\n    settings \u003d {\u0027000000008DEC044C\u0027: 430,  # 2017/01/17-22:09:27, 2017/01/26-22:14:53\n                \u0027000000000E77EE00\u0027: 486,  # 2016/11/23-00:00:00, 2016/12/16-00:00:00\n                \u002700000000902FBDD2\u0027: 486  # 2016/11/23-00:00:00, 2016/12/16-00:00:00\n                }\n\n    for uid in settings:\n        ndays \u003d settings[uid]\n        add_history_data(uid, ndays)\n",
+      "user": "admin",
+      "dateUpdated": "2018-03-28 17:47:48.623",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python",
+        "editorHide": false,
+        "tableHide": true
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": []
+      },
+      "apps": [],
+      "jobName": "paragraph_1521804506365_-692455210",
+      "id": "20180323-122826_1379702800",
+      "dateCreated": "2018-03-23 12:28:26.366",
+      "dateStarted": "2018-04-09 09:08:00.003",
+      "dateFinished": "2018-04-09 09:08:00.082",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "user": "admin",
+      "config": {},
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "jobName": "paragraph_1521804559136_1965850923",
+      "id": "20180323-122919_1845573536",
+      "dateCreated": "2018-03-23 12:29:19.137",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    }
+  ],
+  "name": "AddDataToOpenTSDB",
+  "id": "2D9E3D8P2",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {
+    "2D5MX43ND:shared_process": []
+  },
+  "config": {
+    "looknfeel": "default",
+    "personalizedMode": "false",
+    "cronExecutingUser": ""
+  },
+  "info": {}
+}

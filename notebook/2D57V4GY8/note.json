@@ -1,0 +1,30 @@
+{
+  "paragraphs": [
+    {
+      "user": "admin",
+      "config": {},
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "jobName": "paragraph_1518121549980_1809384372",
+      "id": "20180208-212549_1253275888",
+      "dateCreated": "2018-02-08 21:25:49.980",
+      "status": "READY",
+      "progressUpdateIntervalMs": 500
+    }
+  ],
+  "name": "~Trash/Trialing/Test1",
+  "id": "2D57V4GY8",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {
+    "2D5TEJP97:shared_process": [],
+    "2D7Y92WN8:shared_process": [],
+    "2D5MX43ND:shared_process": [],
+    "2D7RK425E:shared_process": []
+  },
+  "config": {},
+  "info": {}
+}

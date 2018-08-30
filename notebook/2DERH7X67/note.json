@@ -1,0 +1,471 @@
+{
+  "paragraphs": [
+    {
+      "text": "import datetime as dt\nimport json\nfrom postgres import Postgres\nimport arrow\nimport smappy\nimport logging\nimport pytz\nimport re\nimport sys\nimport time\nimport numpy as np\nimport pandas as pd\nimport requests\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:50:24.698",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": []
+      },
+      "apps": [],
+      "jobName": "paragraph_1526564579946_-1158671743",
+      "id": "20180517-154300_1250040528",
+      "dateCreated": "2018-05-17 15:43:00.000",
+      "dateStarted": "2018-05-22 08:50:24.865",
+      "dateFinished": "2018-05-22 08:51:44.654",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "\nclass Smapee:\n    def __init__(self, clientId, clientSecret, username, password, verbose\u003dTrue):\n        self.clientId \u003d clientId\n        self.clientSecret \u003d clientSecret\n        self.username \u003d username\n        self.password \u003d password\n        self.smapee \u003d smappy.Smappee(clientId, clientSecret)\n        self.smapee.authenticate(username, password)\n        self.service_location_id \u003d self.smapee.get_service_locations()[\u0027serviceLocations\u0027][0][\u0027serviceLocationId\u0027]\n\n    def set_db(self, db):\n        self.db \u003d db\n\n    def save_service_location_info(self):\n        info \u003d self.smapee.get_service_location_info(self.service_location_id)\n        self.db.run(\u0027INSERT INTO smapee_service_info VALUES(%s, %s, %s, %s, %s, %s)\u0027, (self.service_location_id, self.clientId, self.clientSecret, self.username, self.password, json.dumps(info)))\n\n\n    def get_start_timestamp(self, table_name):\n        try:\n            start \u003d self.db.one(\u0027SELECT max(\"timestamp\") as last_time FROM \u0027+table_name+\u0027 WHERE serviceid\u003d%(serviceid)s\u0027, {\u0027serviceid\u0027:self.service_location_id})\n            if start is None:\n                raise Exception\n        except Exception as e:\n            start \u003d dt.datetime.utcnow() - dt.timedelta(days\u003d365)\n        return start\n\n\n\n    def save_5min_data(self):\n        try:\n            start \u003d arrow.get(self.get_start_timestamp(\u0027smapee_elec_5min\u0027), \u0027Europe/Copenhagen\u0027).to(\u0027utc\u0027).datetime + dt.timedelta(seconds\u003d1)\n            end \u003d dt.datetime.utcnow()\n            print(\u0027Import every  5min:\u0027, start, \u0027-\u0027, end)\n            df \u003d self.smapee.get_consumption_dataframe(self.service_location_id, start\u003dstart, end\u003dend, aggregation\u003d1)\n            df.reset_index(inplace\u003dTrue)\n            for row in df.to_dict(orient\u003d\u0027records\u0027):\n                row[\u0027serviceid\u0027] \u003d self.service_location_id\n                row[\u0027timestamp\u0027] \u003d arrow.get(row[\u0027timestamp\u0027], \u0027utc\u0027).to(\u0027Europe/Copenhagen\u0027).datetime\n                db.run(\u0027INSERT INTO smapee_elec_5min values(%(timestamp)s::timestamp without time zone, \\\n                   %(serviceid)s, %(alwaysOn)s, %(consumption)s, %(solar)s)\u0027, row)\n        except Exception as e:\n            print(e)\n\n    def save_hourly_data(self):\n        try:\n            start \u003d arrow.get(self.get_start_timestamp(\u0027smapee_elec_hourly\u0027), \u0027Europe/Copenhagen\u0027).to(\u0027utc\u0027).datetime + dt.timedelta(hours\u003d1)\n            end \u003d dt.datetime.utcnow()\n            print(\u0027Import hourly:\u0027, start, \u0027-\u0027, end)\n            df \u003d self.smapee.get_consumption_dataframe(self.service_location_id, start\u003dstart, end\u003dend, aggregation\u003d2)\n            df.reset_index(inplace\u003dTrue)\n            for row in df.to_dict(orient\u003d\u0027records\u0027):\n                row[\u0027serviceid\u0027] \u003d self.service_location_id\n                row[\u0027timestamp\u0027] \u003d arrow.get(row[\u0027timestamp\u0027], \u0027utc\u0027).to(\u0027Europe/Copenhagen\u0027).datetime\n                db.run(\u0027INSERT INTO smapee_elec_hourly values(%(timestamp)s::timestamp without time zone, \\\n                   %(serviceid)s, %(alwaysOn)s, %(consumption)s, %(solar)s)\u0027, row)\n        except Exception as e:\n            print(e)\n\n    def save_daily_data(self):\n        try:\n            start \u003d arrow.get(self.get_start_timestamp(\u0027smapee_elec_daily\u0027)).datetime + dt.timedelta(days\u003d1)\n            end \u003d dt.datetime.utcnow()\n            print(\u0027Import daily:\u0027, start, \u0027-\u0027, end)\n            df \u003d self.smapee.get_consumption_dataframe(self.service_location_id, start\u003dstart, end\u003dend, aggregation\u003d3)\n            df.reset_index(inplace\u003dTrue)\n            for row in df.to_dict(orient\u003d\u0027records\u0027):\n                row[\u0027serviceid\u0027] \u003d self.service_location_id\n                row[\u0027timestamp\u0027] \u003d arrow.get(row[\u0027timestamp\u0027]).format(fmt\u003d\u0027YYYY-MM-DD\u0027)\n                db.run(\u0027INSERT INTO smapee_elec_daily values(%(timestamp)s::timestamp without time zone, \\\n                   %(serviceid)s, %(alwaysOn)s, %(consumption)s, %(solar)s)\u0027, row)\n        except Exception as e:\n            print(e)\n\n\n    def get_appliance_start_timestamp(self, serviceid, applianceid):\n        try:\n            start \u003d self.db.one(\u0027SELECT max(\"timestamp\") as last_time FROM smapee_appliance_data WHERE serviceid\u003d%(serviceid)s and applianceid\u003d%(applianceid)s\u0027,\n                                {\u0027serviceid\u0027:serviceid, \u0027applianceid\u0027:applianceid})\n            if start is None:\n                raise Exception\n        except Exception as e:\n            start \u003d dt.datetime.utcnow() - dt.timedelta(days\u003d365)\n        return start\n\n\n    def save_appliance_events(self):\n        SQL \u003d \"select cast(json_array_elements(info-\u003e\u0027appliances\u0027)-\u003e\u003e\u0027id\u0027 as integer) as appliance_id, \" \\\n              \"json_array_elements(info-\u003e\u0027appliances\u0027)-\u003e\u003e\u0027name\u0027 as name \" \\\n              \"from smapee_service_info where serviceid\u003d%(serviceid)s order by 1\"\n        rows \u003d self.db.all(SQL, {\u0027serviceid\u0027: self.service_location_id},  back_as\u003ddict)\n        end \u003d dt.datetime.utcnow()\n        for row in rows:\n            applianceId \u003d row.get(\u0027appliance_id\u0027)\n            if applianceId:\n                start \u003d arrow.get(self.get_appliance_start_timestamp(self.service_location_id, applianceId), \u0027Europe/Copenhagen\u0027).to(\u0027utc\u0027).datetime + dt.timedelta(seconds\u003d1)\n                app_events \u003d self.smapee.get_events(self.service_location_id, applianceId, start, end)\n                for event in app_events:\n                    event[\u0027serviceId\u0027] \u003d self.service_location_id\n                    event[\u0027applianceId\u0027] \u003d applianceId\n                    event[\u0027name\u0027] \u003d row.get(\u0027name\u0027)\n                    event[\u0027timestamp\u0027] \u003d arrow.get(str(event[\u0027timestamp\u0027]/1000.0)).to(\u0027Europe/Copenhagen\u0027).datetime\n                    if not \u0027totalPower\u0027 in event:\n                        event[\u0027totalPower\u0027] \u003d None\n                    self.db.run(\"INSERT INTO smapee_appliance_data VALUES(%(serviceId)s, %(applianceId)s, %(timestamp)s::timestamp without time zone, %(name)s, %(totalPower)s, %(activePower)s)\", event)\n\n\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:51:44.743",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": []
+      },
+      "apps": [],
+      "jobName": "paragraph_1526564593732_1698881312",
+      "id": "20180517-154313_2091502902",
+      "dateCreated": "2018-05-17 15:43:13.732",
+      "dateStarted": "2018-05-22 08:51:44.860",
+      "dateFinished": "2018-05-22 08:51:44.942",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "\naccounts \u003d [\n     {\u0027client_id\u0027:\u0027Jens Andrsen\u0027, \u0027client_secret\u0027:\u0027LmYUzYvLBJ\u0027, \u0027username\u0027:\u0027Jens Andrsen\u0027, \u0027password\u0027:\u0027DTUbyg402\u0027},\n     {\u0027client_id\u0027:\u0027hagel\u0027, \u0027client_secret\u0027:\u0027grkxbUYndI\u0027, \u0027username\u0027:\u0027hagel\u0027, \u0027password\u0027:\u0027DTUbyg402\u0027},\n     {\u0027client_id\u0027: \u0027kewin\u0027, \u0027client_secret\u0027: \u00273dDhxJaGbg\u0027, \u0027username\u0027: \u0027kewin\u0027, \u0027password\u0027: \u0027DTUbyg402\u0027},\n     {\u0027client_id\u0027:\u0027Jenny Eriksen\u0027, \u0027client_secret\u0027:\u0027Khe6YfDr7S\u0027, \u0027username\u0027:\u0027Jenny Eriksen\u0027, \u0027password\u0027:\u0027DTUbyg402\u0027},\n     {\u0027client_id\u0027:\u0027annelise\u0027, \u0027client_secret\u0027:\u0027ZC6UkLQUMa\u0027, \u0027username\u0027:\u0027annelise\u0027, \u0027password\u0027:\u0027DTUbyg402\u0027}\n]\n\ndb \u003d Postgres(\"postgres://xiuli:Abcd1234@localhost/testdb\")\nfor account in accounts:\n    smapee \u003d Smapee(clientId\u003daccount[\u0027client_id\u0027],\n                    clientSecret\u003daccount[\u0027client_secret\u0027],\n                    username\u003daccount[\u0027username\u0027],\n                    password\u003daccount[\u0027password\u0027],\n                    verbose\u003dTrue)\n    print(\u0027------ {} ------\u0027.format(account[\u0027client_id\u0027]))\n    smapee.set_db(db)\n    smapee.save_5min_data()\n    smapee.save_hourly_data()\n    smapee.save_daily_data()\n    smapee.save_appliance_events()\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:51:44.951",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "------ Jens Andrsen ------\nImport every  5min: 2018-05-17 21:50:01+00:00 - 2018-05-22 06:51:47.264048\nImport hourly: 2018-05-17 22:00:00+00:00 - 2018-05-22 06:52:07.478740\nImport daily: 2018-05-17 00:00:00+00:00 - 2018-05-22 06:52:10.920347\n------ hagel ------\nImport every  5min: 2017-05-22 04:52:20.579214+00:00 - 2018-05-22 06:52:19.580077\nImport hourly: 2018-03-14 18:00:00+00:00 - 2018-05-22 06:52:20.804617\nImport daily: 2018-03-14 00:00:00+00:00 - 2018-05-22 06:52:21.027110\n------ kewin ------\nImport every  5min: 2018-05-17 21:50:01+00:00 - 2018-05-22 06:52:25.091956\nImport hourly: 2018-05-17 22:00:00+00:00 - 2018-05-22 06:52:38.240999\nImport daily: 2018-05-17 00:00:00+00:00 - 2018-05-22 06:52:39.416971\n------ Jenny Eriksen ------\nImport every  5min: 2018-05-17 21:50:01+00:00 - 2018-05-22 06:52:47.001404\nImport hourly: 2018-05-17 22:00:00+00:00 - 2018-05-22 06:53:03.279089\nImport daily: 2018-05-17 00:00:00+00:00 - 2018-05-22 06:53:04.612042\n------ annelise ------\nImport every  5min: 2018-05-17 21:50:01+00:00 - 2018-05-22 06:54:32.394071\nImport hourly: 2018-05-17 22:00:00+00:00 - 2018-05-22 06:54:45.934639\nImport daily: 2018-05-17 00:00:00+00:00 - 2018-05-22 06:54:47.107820\n"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526565665143_1849270658",
+      "id": "20180517-160105_1632491643",
+      "dateCreated": "2018-05-17 16:01:05.143",
+      "dateStarted": "2018-05-22 08:51:45.056",
+      "dateFinished": "2018-05-22 08:56:25.711",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sh\n\nexport PGPASSWORD\u003dAbcd1234\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from smapee_elec_5min) to \u0027/tmp/smapee_elec_5min.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from smapee_elec_hourly) to \u0027/tmp/smapee_elec_hourly.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from smapee_elec_daily) to \u0027/tmp/smapee_elec_daily.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from smapee_service_info) to \u0027/tmp/smapee_service_info.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from smapee_appliance_data) to \u0027/tmp/smapee_appliance_data.csv\u0027 CSV header delimiter \u0027|\u0027\"\n\nsudo chown www-data:www-data /tmp/*.csv\nsudo mv /tmp/*.csv /opt/owncloud/data/admin/files/data/IoTData/",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:56:25.757",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "sh",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/sh"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "COPY 33708\nCOPY 9146\nCOPY 442\nCOPY 5\nCOPY 65281\n"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526565742914_1937605765",
+      "id": "20180517-160222_586290352",
+      "dateCreated": "2018-05-17 16:02:22.914",
+      "dateStarted": "2018-05-22 08:56:25.831",
+      "dateFinished": "2018-05-22 08:56:32.438",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%md\n\n## Import IC-Meter data\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:56:32.530",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true
+        },
+        "editorMode": "ace/mode/markdown",
+        "editorHide": true,
+        "tableHide": false
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "HTML",
+            "data": "\u003cdiv class\u003d\"markdown-body\"\u003e\n\u003ch2\u003eImport IC-Meter data\u003c/h2\u003e\n\u003c/div\u003e"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526566565976_-611121174",
+      "id": "20180517-161605_2103095825",
+      "dateCreated": "2018-05-17 16:16:05.976",
+      "dateStarted": "2018-05-22 08:56:33.011",
+      "dateFinished": "2018-05-22 08:56:35.927",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "class IcMeter:\n    def __init__(self, user, password, verbose\u003dTrue, timeout\u003d5000):\n        self.user \u003d user\n        self.password \u003d password\n        self.timeout \u003d timeout\n        self.verbose \u003d verbose\n        self.ts_name \u003d \u0027ic-meter.{}\u0027\n\n    def set_db(self, db):\n        self.db \u003d db\n\n\n    def get_start_timestamp(self, boxid):\n        try:\n            start \u003d self.db.one(\u0027SELECT max(readtime) FROM icmeter_data WHERE boxid\u003d%(boxid)s\u0027, {\u0027boxid\u0027:boxid})\n            if start:\n                return arrow.get(start).timestamp +1\n        except Exception as e:\n            pass\n        return None\n\n\n    def get_access_token(self):\n        headers \u003d {\"user-agent\": \"curl/7.43.0\"}\n        url \u003d \"https://app.ic-meter.com/icm/oauth/token?client_id\u003dtrusted-client\u0026grant_type\u003dpassword\u0026scope\u003dread\u0026username\u003d%s\u0026password\u003d%s\" % (\n            self.user, self.password)\n        r \u003d requests.get(url, headers\u003dheaders, allow_redirects\u003dFalse, timeout\u003dself.timeout)\n        if r.status_code \u003d\u003d 200:\n            session \u003d json.loads(r.text)\n            self.access_token \u003d session[\u0027access_token\u0027]\n            if self.verbose:\n                print (session)\n        else:\n            raise Exception(r.text)\n\n    def save_boxes(self):\n        self.get_access_token()\n        url \u003d \"https://app.ic-meter.com/icm/api/boxlocations?access_token\u003d%s\u0026_\u003d%s\" % (\n            self.access_token, int(round(time.time() * 1000)))\n        r \u003d requests.get(url, allow_redirects\u003dFalse, timeout\u003dself.timeout)\n        boxes \u003d json.loads(r.text)\n        for box in boxes:\n            self.db.run(\u0027INSERT INTO icmeter_devices VALUES(%(boxid)s, %(info)s) ON CONFLICT (boxid) DO UPDATE SET info\u003d%(info)s\u0027,\n                        {\u0027boxid\u0027:int(box[\u0027boxId\u0027]), \u0027info\u0027: json.dumps(box)})\n        return boxes\n\n    def save_missing(self):\n        boxes \u003d self.save_boxes()\n        for box in boxes:\n            box_id \u003d box[\u0027boxId\u0027]\n            self.tz \u003d pytz.timezone(box[\u0027timezone\u0027])\n\n            start \u003d self.get_start_timestamp(box_id)\n            if start \u003d\u003d None:\n                start \u003d int(box[\u0027fromdate\u0027] / 1000)\n\n            stop \u003d int(time.time())\n            if \u0027lastMeasurementDate\u0027 in box:\n                stop \u003d int(box[\u0027lastMeasurementDate\u0027] / 1000)\n\n            self.save_all_points(box_id, start, stop, 60 * 60 * 24 * 7)\n\n    def save_all_points(self, box_id, start, stop, period\u003d60 * 60 * 24 * 7):\n        if start \u003e\u003d stop:\n            print(\"No new data available for {}, skipping\\n\".format(box_id))\n            return\n\n        print(\"Downloading data of box %s  from %s to %s\\n\" %\n              (box_id, arrow.get(start).format(\u0027YYYY-MM-DD HH:mm:ss ZZ\u0027), arrow.get(stop).format(\u0027YYYY-MM-DD HH:mm:ss ZZ\u0027)))\n        now \u003d time.time()\n        count \u003d 0\n        for f in range(start, stop, period):\n            completed \u003d 100.0 * (f - start) / (stop - start)\n            delta \u003d time.time() - now\n\n            if self.verbose:\n                if delta \u003e 10:\n                    timeleft \u003d int((100.0 - completed) * (delta / completed))\n                    print(\"Completed: %0.0f%% (%i seconds left)\\n\" % (completed, timeleft)),\n                else:\n                    print(\"Completed: %0.0f%%\\n\" % completed),\n                sys.stdout.flush()\n\n            data \u003d self.get_data_period(box_id, f, period)\n            if type(data) !\u003d pd.core.frame.DataFrame:\n                time.sleep(3)\n                print(\u0027Retrying...\u0027)\n                data \u003d self.get_data_period(box_id, f, period)\n\n            if (type(data) \u003d\u003d pd.core.frame.DataFrame) and (not data.empty):\n                count +\u003d data.shape[0]\n                data.reset_index(inplace\u003dTrue)\n                for row in data.to_dict(orient\u003d\u0027records\u0027):\n                    row[\u0027boxid\u0027] \u003d box_id\n                    self.db.run(\u0027INSERT INTO icmeter_data values(%(boxid)s, \\\n                                   %(time)s, %(Temperature)s, %(Humidity)s, %(CO2)s)\u0027, row)\n\n        completed \u003d (100 * (f - start)) / (stop - start)\n        if self.verbose:\n            print(\"Completed: %0.0f%%  \\n  \" % completed),\n            delta \u003d time.time() - now\n        print(\"Type\u003dinfo msg\u003d\\\"Task completed\\\" elapsed_time\u003d%0.0f rows_written\u003d%i \\n\" % (delta, count))\n\n    def get_data_period(self, box_id, start\u003d1498720785, period\u003d60 * 60 * 24 * 7.0):\n        utc \u003d pytz.timezone(\u0027UTC\u0027)\n        fromdate \u003d self.tz.normalize(self.tz.localize(dt.datetime.fromtimestamp(start))).astimezone(\n            utc).isoformat().replace(\n            \u0027+00:00\u0027, \u0027Z\u0027)\n        todate \u003d self.tz.normalize(self.tz.localize(dt.datetime.fromtimestamp(start + period))).astimezone(\n            utc).isoformat().replace(\n            \u0027+00:00\u0027, \u0027Z\u0027)\n\n        timestamp \u003d int(round(time.time() * 1000))\n        data_url \u003d \"https://app.ic-meter.com/icm/api/measurements/days/%s?access_token\u003d%s\u0026fromDate\u003d%s\u0026toDate\u003d%s\u0026forecast\u003dfalse\u0026_\u003d%i\" % (\n            box_id, self.access_token, fromdate, todate, timestamp)\n        #print data_url\n\n        r \u003d requests.get(data_url, timeout\u003dself.timeout)\n\n        if r.status_code !\u003d 200:\n            r \u003d requests.get(data_url, timeout\u003dself.timeout)\n        if r.status_code !\u003d 200:\n            r \u003d requests.get(data_url, timeout\u003dself.timeout)\n        if r.status_code !\u003d 200:\n            print(\"Request failed!\")\n\n        json \u003d r.json()\n        return self.convert_to_df(json)\n\n    def convert_to_df(self, json):\n        numberOfRows \u003d len(json[\u0027rows\u0027])\n\n        columns \u003d []\n        col_types \u003d []\n        for col in json[\u0027cols\u0027]:\n            columns.append(col[\u0027id\u0027])\n            col_types.append(col[\u0027type\u0027])\n\n        df \u003d pd.DataFrame(index\u003dnp.arange(0, numberOfRows), columns\u003dcolumns)\n        for x in np.arange(0, numberOfRows):\n            values \u003d []\n            for i, value in enumerate(json[\u0027rows\u0027][x][\u0027c\u0027]):\n                if col_types[i] \u003d\u003d \u0027datetime\u0027:\n                    m \u003d re.findall(r\u0027Date\\((\\d+)\\,(\\d+)\\,(\\d+)\\,(\\d+)\\,(\\d+)\\,(\\d+)\\)\u0027, value[\u0027v\u0027])[0]\n                    row_time \u003d self.tz.localize(\n                        dt.datetime(int(m[0]), int(m[1]) + 1, int(m[2]), int(m[3]), int(m[4]), int(m[5]))).isoformat()\n                    values.append(row_time)\n                else:\n                    if value[\u0027v\u0027] \u003d\u003d None:\n                        values.append(float(0))\n                    else:\n                        values.append(float(value[\u0027v\u0027]))\n            df.loc[x] \u003d values\n        df.index \u003d pd.to_datetime(df[\"realtime\"])\n        df \u003d df.drop(\"realtime\", 1)\n        df.index.name \u003d \"time\"\n        return df\n\n\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:56:35.945",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": []
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567438628_-106941020",
+      "id": "20180517-163038_919634017",
+      "dateCreated": "2018-05-17 16:30:38.628",
+      "dateStarted": "2018-05-22 08:56:36.043",
+      "dateFinished": "2018-05-22 08:56:36.157",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "db \u003d Postgres(\"postgres://xiuli:Abcd1234@localhost/testdb\")\nicmeter \u003d IcMeter(user\u003d\u0027hagel@byg.dtu.dk\u0027,\n                  password\u003d\u0027DTUbyg402\u0027,\n                  verbose\u003dTrue)\nicmeter.set_db(db)\nicmeter.save_missing()",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 08:56:36.230",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "{\u0027access_token\u0027: \u00275fc606e9-1691-4abd-86c9-910e29a96a35\u0027, \u0027refresh_token\u0027: \u0027dc614fd7-ff0c-4331-b02a-0ada782c5358\u0027, \u0027token_type\u0027: \u0027bearer\u0027, \u0027expires_in\u0027: 43199, \u0027scope\u0027: \u0027read\u0027}\nNo new data available for 5482, skipping\n\nDownloading data of box 5839  from 2018-05-17 21:56:33 +00:00 to 2018-05-22 06:46:30 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d16 rows_written\u003d1255 \n\nDownloading data of box 5838  from 2018-05-17 21:57:32 +00:00 to 2018-05-22 06:55:17 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d14 rows_written\u003d1256 \n\nDownloading data of box 5843  from 2018-05-17 21:56:56 +00:00 to 2018-05-22 06:54:25 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d13 rows_written\u003d1258 \n\nDownloading data of box 5840  from 2018-05-17 21:58:28 +00:00 to 2018-05-22 06:53:40 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d13 rows_written\u003d1257 \n\nDownloading data of box 5837  from 2018-05-17 21:59:40 +00:00 to 2018-05-22 06:50:41 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d19 rows_written\u003d1258 \n\nDownloading data of box 5845  from 2018-05-17 21:57:21 +00:00 to 2018-05-22 06:51:33 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d13 rows_written\u003d1259 \n\nDownloading data of box 5844  from 2018-05-17 21:57:21 +00:00 to 2018-05-22 06:54:14 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d15 rows_written\u003d1258 \n\nDownloading data of box 5842  from 2018-05-17 21:55:40 +00:00 to 2018-05-22 06:53:38 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d18 rows_written\u003d1258 \n\nDownloading data of box 5841  from 2018-05-17 21:58:38 +00:00 to 2018-05-22 06:55:03 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d14 rows_written\u003d1256 \n\nDownloading data of box 5846  from 2018-05-17 22:00:34 +00:00 to 2018-05-22 06:51:27 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d13 rows_written\u003d1258 \n\nDownloading data of box 5781  from 2018-05-17 22:00:19 +00:00 to 2018-05-22 06:52:59 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d15 rows_written\u003d1258 \n\nDownloading data of box 5780  from 2018-05-17 21:59:18 +00:00 to 2018-05-22 06:51:15 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d15 rows_written\u003d1257 \n\nDownloading data of box 6325  from 2018-05-17 21:57:02 +00:00 to 2018-05-22 06:55:19 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d13 rows_written\u003d1258 \n\nDownloading data of box 6326  from 2018-05-17 22:00:11 +00:00 to 2018-05-22 06:51:29 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d14 rows_written\u003d1258 \n\nDownloading data of box 5786  from 2018-05-17 21:57:05 +00:00 to 2018-05-22 06:51:40 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d16 rows_written\u003d1259 \n\nDownloading data of box 5785  from 2018-05-17 21:56:42 +00:00 to 2018-05-22 06:46:08 +00:00\n\nCompleted: 0%\n\nCompleted: 0%  \n  \nType\u003dinfo msg\u003d\"Task completed\" elapsed_time\u003d18 rows_written\u003d1258 \n\n"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567467623_335231563",
+      "id": "20180517-163107_447272892",
+      "dateCreated": "2018-05-17 16:31:07.623",
+      "dateStarted": "2018-05-22 08:56:36.295",
+      "dateFinished": "2018-05-22 09:00:59.432",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sh\n\nexport PGPASSWORD\u003dAbcd1234\n\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from icmeter_data) to \u0027/tmp/icmeter_data.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from icmeter_devices) to \u0027/tmp/icmeter_devices.csv\u0027 CSV header delimiter \u0027|\u0027\"\n\nsudo chown www-data:www-data /tmp/*.csv\nsudo mv /tmp/*.csv /opt/owncloud/data/admin/files/data/IoTData/",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:00:59.478",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "sh",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/sh"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "INCOMPLETE",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "Paragraph received a SIGTERM\nExitValue: 143"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567516885_-1451731220",
+      "id": "20180517-163156_1738988971",
+      "dateCreated": "2018-05-17 16:31:56.886",
+      "dateStarted": "2018-05-22 09:00:59.543",
+      "dateFinished": "2018-05-22 09:02:26.512",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%md\n\n## Import Wirelesstag data",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:02:26.544",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "markdown",
+          "editOnDblClick": true
+        },
+        "editorMode": "ace/mode/markdown",
+        "editorHide": true,
+        "tableHide": false
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "HTML",
+            "data": "\u003cdiv class\u003d\"markdown-body\"\u003e\n\u003ch2\u003eImport Wirelesstag data\u003c/h2\u003e\n\u003c/div\u003e"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567643972_-836500250",
+      "id": "20180517-163403_340551495",
+      "dateCreated": "2018-05-17 16:34:03.972",
+      "dateStarted": "2018-05-22 09:02:26.607",
+      "dateFinished": "2018-05-22 09:02:26.619",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "\n_BASEURL \u003d \"https://my.wirelesstag.net\"\n_SIGNIN \u003d _BASEURL + \"/ethAccount.asmx/SignIn\"\n_ISSIGNED \u003d _BASEURL + \"/ethAccount.asmx/IsSignedIn\"\n_GETTAGLIST \u003d _BASEURL + \"/ethClient.asmx/GetTagList\"\n_GETTEMPDATA \u003d _BASEURL + \"/ethLogShared.asmx/GetLatestTemperatureRawDataByUUID\"\n_GETTEMPCSV \u003d _BASEURL + \"/ethDownloadTempCSV.aspx\"\n\n_HEADERS \u003d {\n    \"content-type\": \"application/json; charset\u003dutf-8\"\n}\n\n_DECIMALS \u003d 1\n\n\nclass ClientAuth:\n    \"\"\"\n    Request authentication and return authentication cookie. If cookie requested and not already logged in, it will log in again.\n    \"\"\"\n\n    def __init__(self, username, password):\n\n        postParams \u003d {\n            \"email\": username,\n            \"password\": password\n        }\n\n        r \u003d requests.post(_SIGNIN, headers\u003d_HEADERS, data\u003djson.dumps(postParams))\n        self._accessCookie \u003d r.cookies\n        self._username \u003d username\n        self._password \u003d password\n\n        r \u003d requests.post(_ISSIGNED, headers\u003d_HEADERS, cookies\u003dself._accessCookie)\n        response \u003d r.json()\n        if response[\u0027d\u0027] !\u003d True:\n            raise ValueError(\u0027Incorrect Login operation\u0027)\n\n    @property\n    def accessCookie(self):\n        # if not signed in, sign in and return cookie\n\n        r \u003d requests.post(_ISSIGNED, headers\u003d_HEADERS)\n        response \u003d r.json()\n        if response[\u0027d\u0027] \u003d\u003d \u0027TRUE\u0027:\n            return self._accessCookie\n        else:\n            postParams \u003d {\n                \"email\": self._username,\n                \"password\": self._password\n            }\n\n            r \u003d requests.post(_SIGNIN, headers\u003d_HEADERS, data\u003djson.dumps(postParams))\n\n            self._accessCookie \u003d r.cookies\n            return self._accessCookie\n\n        return self._accessCookie\n\n\nclass WirelessTagData:\n    \"\"\"\n    Retrieves data from Wireless senors available\n    \"\"\"\n\n    def __init__(self, authData):\n        self.getAuthToken \u003d authData.accessCookie\n\n    #   self._TagList \u003d self.getTagsList()\n\n\n    @property\n    def tagList(self):\n        self._tagList \u003d {}\n        cookies \u003d self.getAuthToken\n        r \u003d requests.post(_GETTAGLIST, headers\u003d_HEADERS, cookies\u003dcookies)\n\n        response \u003d r.json()\n        for i in response:\n            for tag in response[i]:\n                tag_id \u003d tag[\"slaveId\"]\n                tag_uuid \u003d tag[\"uuid\"]\n                tag_name \u003d tag[\"name\"]\n                tag_type \u003d tag[\"tagType\"]\n\n                self._tagList[tag_uuid] \u003d {\u0027tag_id\u0027: tag_id, \u0027tag_name\u0027: tag_name, \u0027tag_type\u0027: tag_type}\n\n        return self._tagList\n\n    def getLogInRange(self, uuid\u003d\"\", fromDate\u003d\u0027\u0027, toDate\u003d\u0027\u0027):\n        url \u003d _GETTEMPCSV + \u0027?uuid\u003d{}\u0026fromdate\u003d{}\u0026todate\u003d{}\u0027.format(uuid, fromDate, toDate)\n        status \u003d 500\n        tries \u003d 0\n        res \u003d None\n        headers \u003d {\n            \u0027User-Agent\u0027: \u0027Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.90 Safari/537.36\u0027}\n        while status!\u003d200 and tries\u003c3:\n            res \u003d requests.get(url, headers\u003dheaders)\n            status \u003d res.status_code\n            tries +\u003d 1\n            time.sleep(2)\n        print(url, status)\n        if status\u003d\u003d200:\n            return res.content.decode(\u0027utf_8\u0027)\n        else:\n            return None\n\n\n    def getTemperature(self, uuid\u003d\"\"):\n        \"\"\"\n        If no UUID provided, it will take the first sensor discovered\n        \"\"\"\n\n        if uuid \u003d\u003d \"\":\n            uuid \u003d self.tagList.keys()[0]\n        data \u003d {\n            \"uuid\": uuid\n        }\n        cookies \u003d self.getAuthToken\n\n        r \u003d requests.post(_GETTEMPDATA, headers\u003d_HEADERS, cookies\u003dcookies, data\u003djson.dumps(data))\n        parsed_response \u003d r.json()\n        temp \u003d Decimal(float(parsed_response[\"d\"][\"temp_degC\"]))\n        rounded_temp \u003d round(temp, _DECIMALS)\n        return rounded_temp\n\n    def getHumidity(self, uuid\u003d\"\"):\n        \"\"\"\n        If no UUID provided, it will take the first sensor discovered\n        \"\"\"\n\n        if uuid \u003d\u003d \"\":\n            uuid \u003d self.tagList.keys()[0]\n        data \u003d {\n            \"uuid\": uuid\n        }\n        cookies \u003d self.getAuthToken\n\n        r \u003d requests.post(_GETTEMPDATA, headers\u003d_HEADERS, cookies\u003dcookies, data\u003djson.dumps(data))\n        parsed_response \u003d r.json()\n        humid \u003d Decimal(float(parsed_response[\"d\"][\"cap\"]))\n        rounded_humid \u003d round(humid, _DECIMALS)\n\n        return rounded_humid\n\n    def getBatteryVolt(self, uuid\u003d\"\"):\n        \"\"\"\n        If no UUID provided, it will take the first sensor discovered\n        \"\"\"\n\n        if uuid \u003d\u003d \"\":\n            uuid \u003d self.tagList.keys()[0]\n        data \u003d {\n            \"uuid\": uuid\n        }\n        cookies \u003d self.getAuthToken\n\n        r \u003d requests.post(_GETTEMPDATA, headers\u003d_HEADERS, cookies\u003dcookies, data\u003djson.dumps(data))\n        parsed_response \u003d r.json()\n        return parsed_response[\"d\"][\"battery_volts\"]\n\n\nclass WirelessTag:\n    def __init__(self, user, password, verbose\u003dTrue, timeout\u003d5000):\n        self.ws \u003d WirelessTagData(ClientAuth(user, password))\n        self.timeout \u003d timeout\n        self.verbose \u003d verbose\n        self.tz \u003d pytz.timezone(\"UTC\")\n\n    def set_db(self, db):\n        self.db \u003d db\n\n\n    def get_start_timestamp(self, uuid):\n        try:\n            start \u003d self.db.one(\u0027SELECT max(readtime) FROM wirelesstag_data WHERE uuid\u003d%(uuid)s\u0027, {\u0027uuid\u0027:uuid})\n            if start:\n                return arrow.get(start).timestamp +1\n        except Exception as e:\n            pass\n        return arrow.utcnow().timestamp -42631960\n\n\n    def save_missing(self):\n        self.save_tag_list()\n        for uuid in self.uuids:\n            fromdate \u003d  arrow.get(self.get_start_timestamp(uuid)).format(\u0027YYYY-MM-DDTHH:mm:ss\u0027)\n            todate \u003d arrow.now().format(\u0027YYYY-MM-DDTHH:mm:ss\u0027)\n            print(uuid, fromdate, todate)\n            res \u003d self.ws.getLogInRange(uuid, fromdate, todate)\n            if res:\n                data \u003d res.replace(\u0027\"\u0027, \u0027\u0027).split(\"\\r\\n\")\n                numberOfRows \u003d len(data) - 1\n                for i in np.arange(1, numberOfRows):\n                    values \u003d data[i].split(\u0027,\u0027)\n                    if len(values) \u003d\u003d 4:\n                        row \u003d {}\n                        row[\u0027uuid\u0027] \u003d uuid\n                        row[\u0027readtime\u0027] \u003d arrow.get(values[0]).format(\u0027YYYY-MM-DD HH:mm:ss\u0027)\n                        row[\u0027temperature\u0027] \u003d float(values[1])\n                        row[\u0027humidity\u0027] \u003d float(values[2])\n                        row[\u0027battery\u0027] \u003d float(values[3])\n                        self.db.run(\u0027INSERT INTO wirelesstag_data values(%(uuid)s, \\\n                                         %(readtime)s, %(temperature)s, %(humidity)s, %(battery)s) ON CONFLICT DO NOTHING\u0027, row)\n\n\n    def save_tag_list(self):\n        self.uuids \u003d self.ws.tagList.keys()\n        for uuid in self.ws.tagList.keys():\n            tag \u003d self.ws.tagList[uuid]\n            tag[\u0027uuid\u0027] \u003d uuid\n            self.db.run(\n                \u0027INSERT INTO wirelesstag_devices VALUES(%(uuid)s, %(tag_id)s, %(tag_type)s, %(tag_name)s) \u0027\n                \u0027ON CONFLICT (uuid) DO UPDATE SET tag_id\u003d%(tag_id)s, tag_type\u003d%(tag_type)s, tag_name\u003d%(tag_name)s\u0027, tag)\n\n\n\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:29:43.306",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": []
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567667552_918752165",
+      "id": "20180517-163427_155059",
+      "dateCreated": "2018-05-17 16:34:27.552",
+      "dateStarted": "2018-05-22 09:25:28.574",
+      "dateFinished": "2018-05-22 09:25:28.648",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "db \u003d Postgres(\"postgres://xiuli:Abcd1234@localhost/testdb\")\nwirelesstag \u003d WirelessTag(user\u003d\u0027etchy1682@gmail.com\u0027,\n                          password\u003d\u0027DTUbyg402\u0027,\n                          verbose\u003dTrue,\n                          timeout\u003d5000)\nwirelesstag.set_db(db)\n#wirelesstag.save_tag_list()\nwirelesstag.save_missing()",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:25:33.813",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "python",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/python"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "79f4b0c5-acdb-41d3-a4fc-e79617f89e4d 2017-01-13T21:13:07 2018-05-22T09:25:47\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d79f4b0c5-acdb-41d3-a4fc-e79617f89e4d\u0026fromdate\u003d2017-01-13T21:13:07\u0026todate\u003d2018-05-22T09:25:47 500\n60f35c94-d011-4f56-b4fe-e844f95d0094 2017-01-13T21:13:15 2018-05-22T09:25:55\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d60f35c94-d011-4f56-b4fe-e844f95d0094\u0026fromdate\u003d2017-01-13T21:13:15\u0026todate\u003d2018-05-22T09:25:55 500\nde57bcb2-feea-4a5c-a42e-609be1b8fc2d 2018-05-22T08:59:40 2018-05-22T09:26:02\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003dde57bcb2-feea-4a5c-a42e-609be1b8fc2d\u0026fromdate\u003d2018-05-22T08:59:40\u0026todate\u003d2018-05-22T09:26:02 200\ndb5c57f7-d244-4203-bd08-222a0e883ebf 2017-01-13T21:13:25 2018-05-22T09:26:05\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003ddb5c57f7-d244-4203-bd08-222a0e883ebf\u0026fromdate\u003d2017-01-13T21:13:25\u0026todate\u003d2018-05-22T09:26:05 500\n5c8940d8-bdbf-47c2-a911-cc0a103bac25 2017-01-13T21:13:33 2018-05-22T09:26:13\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d5c8940d8-bdbf-47c2-a911-cc0a103bac25\u0026fromdate\u003d2017-01-13T21:13:33\u0026todate\u003d2018-05-22T09:26:13 500\nc0123ef3-6da2-4bd2-b3cb-2ec98de5ad06 2017-01-13T21:13:40 2018-05-22T09:26:20\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003dc0123ef3-6da2-4bd2-b3cb-2ec98de5ad06\u0026fromdate\u003d2017-01-13T21:13:40\u0026todate\u003d2018-05-22T09:26:20 500\n4810d65b-874c-4882-bb50-5516852cb9fa 2018-03-08T20:44:21 2018-05-22T09:26:28\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d4810d65b-874c-4882-bb50-5516852cb9fa\u0026fromdate\u003d2018-03-08T20:44:21\u0026todate\u003d2018-05-22T09:26:28 500\n42c4638c-2323-4909-8f5f-d97db6bbbf9b 2017-01-13T21:13:56 2018-05-22T09:26:36\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d42c4638c-2323-4909-8f5f-d97db6bbbf9b\u0026fromdate\u003d2017-01-13T21:13:56\u0026todate\u003d2018-05-22T09:26:36 500\n01271ad3-9237-4f9b-b26d-300c93a18117 2017-01-13T21:14:04 2018-05-22T09:26:44\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d01271ad3-9237-4f9b-b26d-300c93a18117\u0026fromdate\u003d2017-01-13T21:14:04\u0026todate\u003d2018-05-22T09:26:44 500\n60d14a23-3d3d-4cd2-bc80-362820c9e95f 2017-01-13T21:14:11 2018-05-22T09:26:51\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d60d14a23-3d3d-4cd2-bc80-362820c9e95f\u0026fromdate\u003d2017-01-13T21:14:11\u0026todate\u003d2018-05-22T09:26:51 500\n164bd10a-1ea9-4e9a-93af-97440bd00262 2017-01-13T21:14:19 2018-05-22T09:26:59\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d164bd10a-1ea9-4e9a-93af-97440bd00262\u0026fromdate\u003d2017-01-13T21:14:19\u0026todate\u003d2018-05-22T09:26:59 500\n28eba552-9ab6-456d-bebf-2763bb195087 2018-03-09T04:10:14 2018-05-22T09:27:07\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d28eba552-9ab6-456d-bebf-2763bb195087\u0026fromdate\u003d2018-03-09T04:10:14\u0026todate\u003d2018-05-22T09:27:07 500\nfd61558f-ce49-474d-ab2a-0a89113710e5 2017-01-13T21:14:34 2018-05-22T09:27:14\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003dfd61558f-ce49-474d-ab2a-0a89113710e5\u0026fromdate\u003d2017-01-13T21:14:34\u0026todate\u003d2018-05-22T09:27:14 500\n68fc1e99-e222-4fef-8d4b-db23ca13989d 2018-03-06T21:39:25 2018-05-22T09:27:22\nhttps://my.wirelesstag.net/ethDownloadTempCSV.aspx?uuid\u003d68fc1e99-e222-4fef-8d4b-db23ca13989d\u0026fromdate\u003d2018-03-06T21:39:25\u0026todate\u003d2018-05-22T09:27:22 500\n"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567735180_1437843489",
+      "id": "20180517-163535_882482202",
+      "dateCreated": "2018-05-17 16:35:35.180",
+      "dateStarted": "2018-05-22 09:25:33.842",
+      "dateFinished": "2018-05-22 09:27:30.241",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sh\n\nexport PGPASSWORD\u003dAbcd1234\n\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from wirelesstag_data) to \u0027/tmp/wirelesstag_data.csv\u0027 CSV header delimiter \u0027|\u0027\"\npsql -h localhost -U xiuli -w -dtestdb -c \"copy (select * from wirelesstag_devices) to \u0027/tmp/wirelesstag_devices.csv\u0027 CSV header delimiter \u0027|\u0027\"\n\nsudo chown www-data:www-data /tmp/*.csv\nsudo mv /tmp/*.csv /opt/owncloud/data/admin/files/data/IoTData/",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:05:03.315",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "sh",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/sh"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "results": {
+        "code": "SUCCESS",
+        "msg": [
+          {
+            "type": "TEXT",
+            "data": "COPY 196415\nCOPY 14\n"
+          }
+        ]
+      },
+      "apps": [],
+      "jobName": "paragraph_1526567774667_-991601175",
+      "id": "20180517-163614_753817461",
+      "dateCreated": "2018-05-17 16:36:14.667",
+      "dateStarted": "2018-05-22 09:05:03.362",
+      "dateFinished": "2018-05-22 09:05:39.354",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    },
+    {
+      "text": "%sh\n",
+      "user": "admin",
+      "dateUpdated": "2018-05-22 09:05:39.388",
+      "config": {
+        "colWidth": 12.0,
+        "fontSize": 9.0,
+        "enabled": true,
+        "results": {},
+        "editorSetting": {
+          "language": "sh",
+          "editOnDblClick": false
+        },
+        "editorMode": "ace/mode/sh"
+      },
+      "settings": {
+        "params": {},
+        "forms": {}
+      },
+      "apps": [],
+      "jobName": "paragraph_1526568041477_805500270",
+      "id": "20180517-164041_337068334",
+      "dateCreated": "2018-05-17 16:40:41.477",
+      "status": "FINISHED",
+      "progressUpdateIntervalMs": 500
+    }
+  ],
+  "name": "Extract IoT Data",
+  "id": "2DERH7X67",
+  "noteParams": {},
+  "noteForms": {},
+  "angularObjects": {},
+  "config": {
+    "looknfeel": "default",
+    "personalizedMode": "false",
+    "cronExecutingUser": "admin",
+    "releaseresource": true,
+    "cron": "0 0 0 * * ?"
+  },
+  "info": {}
+}
